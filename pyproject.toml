@@ -1,0 +1,10 @@
+[project]
+name = "vibo"
+version = "0.1.0"
+description = "Short-video feed whose recommender optimizes D7/D30 retention."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]

@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vibo
+      POSTGRES_PASSWORD: vibo
+      POSTGRES_DB: vibo
+    ports: ["${POSTGRES_PORT:-55432}:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibo -d vibo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["${REDIS_PORT:-56379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"   # media/ files stay owned by you
+    environment: &env
+      DATABASE_URL: postgresql+psycopg://vibo:vibo@postgres:5432/vibo
+      REDIS_URL: redis://redis:6379/0
+      STORAGE: local
+      MEDIA_DIR: /app/media
+      # Phones on your LAN must be able to reach this host; set API_BASE in .env (e.g. http://192.168.1.20:8000)
+      API_BASE: ${API_BASE:-http://localhost:8000}
+      UPLOAD_SECRET: ${UPLOAD_SECRET:-dev-upload-secret}
+    ports: ["${API_PORT:-8000}:8000"]
+    volumes: &code
+      - ./media:/app/media
+      - ./api:/app/api        # live reload in dev
+      - ./engine:/app/engine
+      - ./alembic:/app/alembic
+      - ./worker:/app/worker
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    command: sh -c "alembic upgrade head && uvicorn --factory api.main:create_app --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    build: .
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    environment: *env
+    volumes: *code
+    depends_on:
+      api: { condition: service_healthy }   # api runs the migrations
+    command: rq worker --url redis://redis:6379/0 vibo
+
+  cron:
+    build: .
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    environment: *env
+    volumes: *code
+    depends_on:
+      api: { condition: service_healthy }
+    command: rq cron worker/cron.py --url redis://redis:6379/0
+
+volumes:
+  pgdata:
